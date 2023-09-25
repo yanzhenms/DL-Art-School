@@ -115,11 +115,15 @@ class Trainer:
                 self.train_set, collate_fn = create_dataset(dataset_opt, return_collate=True)
                 self.dataset_debugger = get_dataset_debugger(dataset_opt)
                 if self.dataset_debugger is not None and resume_state is not None:
-                    self.dataset_debugger.load_state(opt_get(resume_state, ['dataset_debugger_state'], {}))
-                train_size = int(math.ceil(len(self.train_set) / dataset_opt['batch_size']))
+                    self.dataset_debugger.load_state(opt_get(resume_state, ['dataset_debugger_state'], {}))                    
+                # torchtts dataset has no __len__ method
+                if dataset_opt['mode'] == 'torchtts':
+                    train_size = int(dataset_opt['num_samples'] / dataset_opt['batch_size'])
+                else:     
+                    train_size = int(math.ceil(len(self.train_set) / dataset_opt['batch_size']))
                 total_iters = int(opt['train']['niter'])
                 self.total_epochs = int(math.ceil(total_iters / train_size))
-                if opt['dist']:
+                if opt['dist'] and dataset_opt['mode'] != 'torchtts':
                     self.train_sampler = DistIterSampler(self.train_set, self.world_size, self.rank, dataset_ratio)
                     self.total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
                     shuffle = False
@@ -127,7 +131,7 @@ class Trainer:
                     self.train_sampler = None
                     shuffle = True
                 self.train_loader = create_dataloader(self.train_set, dataset_opt, opt, self.train_sampler, collate_fn=collate_fn, shuffle=shuffle)
-                if self.rank <= 0:
+                if self.rank <= 0 and dataset_opt['mode'] != 'torchtts':
                     self.logger.info('Number of training data elements: {:,d}, iters: {:,d}'.format(
                         len(self.train_set), train_size))
                     self.logger.info('Total epochs needed: {:d} for iters {:,d}'.format(
