@@ -117,25 +117,26 @@ class Trainer:
                 if self.dataset_debugger is not None and resume_state is not None:
                     self.dataset_debugger.load_state(opt_get(resume_state, ['dataset_debugger_state'], {}))                    
                 # torchtts dataset has no __len__ method
-                if dataset_opt['mode'] == 'torchtts':
-                    train_size = int(dataset_opt['num_samples'] / dataset_opt['batch_size'])
-                else:     
-                    train_size = int(math.ceil(len(self.train_set) / dataset_opt['batch_size']))
-                total_iters = int(opt['train']['niter'])
-                self.total_epochs = int(math.ceil(total_iters / train_size))
+                # if dataset_opt['mode'] == 'torchtts':
+                #     train_size = int(dataset_opt['num_samples'] / dataset_opt['batch_size'])
+                # else:     
+                #     train_size = int(math.ceil(len(self.train_set) / dataset_opt['batch_size']))
+                self.total_iters = int(opt['train'].get('niter', -1))
+                self.total_epochs = int(opt['train'].get('nepoch', -1))
+                assert self.total_iters > 0 or self.total_epochs > 0, "Must specify either total iters or total epochs."                        
                 if opt['dist'] and dataset_opt['mode'] != 'torchtts':
                     self.train_sampler = DistIterSampler(self.train_set, self.world_size, self.rank, dataset_ratio)
-                    self.total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
+                    # self.total_epochs = int(math.ceil(total_iters / (train_size * dataset_ratio)))
                     shuffle = False
                 else:
                     self.train_sampler = None
                     shuffle = True
                 self.train_loader = create_dataloader(self.train_set, dataset_opt, opt, self.train_sampler, collate_fn=collate_fn, shuffle=shuffle)
-                if self.rank <= 0 and dataset_opt['mode'] != 'torchtts':
-                    self.logger.info('Number of training data elements: {:,d}, iters: {:,d}'.format(
-                        len(self.train_set), train_size))
-                    self.logger.info('Total epochs needed: {:d} for iters {:,d}'.format(
-                        self.total_epochs, total_iters))
+                # if self.rank <= 0 and dataset_opt['mode'] != 'torchtts':
+                #     self.logger.info('Number of training data elements: {:,d}, iters: {:,d}'.format(
+                #         len(self.train_set), train_size))
+                #     self.logger.info('Total epochs needed: {:d} for iters {:,d}'.format(
+                #         self.total_epochs, total_iters))
             elif phase == 'val':
                 self.val_set, collate_fn = create_dataset(dataset_opt, return_collate=True)
                 self.val_loader = create_dataloader(self.val_set, dataset_opt, opt, None, collate_fn=collate_fn)
@@ -346,7 +347,9 @@ class Trainer:
 
     def do_training(self):
         self.logger.info('Start training from epoch: {:d}, iter: {:d}'.format(self.start_epoch, self.current_step))
-        for epoch in range(self.start_epoch, self.total_epochs + 1):
+        epoch = self.start_epoch
+        while not self._should_stop():
+        #for epoch in range(self.start_epoch, self.total_epochs + 1):
             self.epoch = epoch
             if self.opt['dist']:
                 self.train_sampler.set_epoch(epoch)
@@ -356,6 +359,13 @@ class Trainer:
             _t = time()
             for train_data in tq_ldr:
                 self.do_step(train_data)
+            epoch += 1
+
+    def _should_stop(self):
+        if self.total_iters > 0:
+            return self.current_step >= self.total_iters
+        else:
+            return self.epoch >= self.total_epochs
 
     def create_training_generator(self, index):
         self.logger.info('Start training from epoch: {:d}, iter: {:d}'.format(self.start_epoch, self.current_step))

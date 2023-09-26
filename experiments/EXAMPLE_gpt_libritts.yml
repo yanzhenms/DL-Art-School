@@ -1,7 +1,7 @@
 name: LibriTTS
 model: extensibletrainer
 scale: 1
-gpu_ids: [0, 1, 2, 3] # <-- unless you have multiple gpus, use this
+gpu_ids: [0] #[0, 1, 2, 3] # <-- unless you have multiple gpus, use this
 start_step: 0 # -1 causes 0.pth to be saved!
 checkpointing_enabled: true  # <-- Gradient checkpointing. Enable for huge GPU memory savings. Disable for distributed training.
 fp16: false # TODO: why does enabling this with 8bit slow down perf??
@@ -26,7 +26,7 @@ datasets:
     pin_memory: True
     dynamic_batch: False
     # Batch size in frame
-    batch_size: 48
+    batch_size: 32
     num_samples: 290000
     vocab_path: ../experiments/bpe_lowercase_asr_256.json
     with_stat_data: True
@@ -116,7 +116,7 @@ path:
 train: # CHANGEME: ALL OF THESE PARAMETERS SHOULD BE EXPERIMENTED WITH
   niter: 50000
   warmup_iter: -1
-  mega_batch_factor: 4    # <-- Gradient accumulation factor. If you are running OOM, increase this to [2,4,8].
+  mega_batch_factor: 8    # <-- Gradient accumulation factor. If you are running OOM, increase this to [2,4,8].
   val_freq: 60 # TODO set this to epoch size * something
 
   default_lr_scheme: MultiStepLR

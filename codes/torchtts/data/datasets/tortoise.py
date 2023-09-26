@@ -79,8 +79,9 @@ class TortoiseDataset(GeneratorBasedBuilder):
 
         self.tokenizer = VoiceBpeTokenizer(self._config["vocab_path"])
 
-        datapipe = datapipe.map(self._add_wav_len)
+        datapipe = datapipe.map(self._process_wav)
         datapipe = datapipe.map(self._tokenize, fn_kwargs={"tokenizer": self.tokenizer})
+        datapipe = datapipe.filter(self._filter_unk_text)
         datapipe = datapipe.map(self._release_unnecessary_data)
 
         if shuffle:
@@ -117,7 +118,7 @@ class TortoiseDataset(GeneratorBasedBuilder):
         return datapipe
 
     @staticmethod
-    def _add_wav_len(data):
+    def _process_wav(data):
         audio = data["speech"]
         data["wav"] = audio
         data["wav_lengths"] = torch.LongTensor([len(audio)])
@@ -130,10 +131,20 @@ class TortoiseDataset(GeneratorBasedBuilder):
         tokens = tokenizer.encode(text)
         tokens = torch.IntTensor(tokens)
 
-        assert not torch.any(tokens <= 1) # assert no <unk>, start, end token
+        if torch.any(tokens <= 1):
+            logger.warning(f"Found <unk> or <pad> in {text}")
+          
+        # assert not torch.any(tokens <= 1) # assert no <unk>, start, end token
         data["text"] = tokens
         data["text_lengths"] = torch.LongTensor([len(tokens)])
         return data
+
+    @staticmethod
+    def _filter_unk_text(data):
+        text = data["text"]
+        if torch.any(text <= 1):
+            return False
+        return True
 
     @staticmethod
     def _release_unnecessary_data(data):
