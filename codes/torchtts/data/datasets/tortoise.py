@@ -1,23 +1,13 @@
-import csv
 import json
-import os
-import re
-import random
-from itertools import chain
-from more_itertools import split_before, windowed
-
 import numpy as np
 import logging
 from pathlib import Path
 
 from torchtts.data.core import features
-from torchtts.data.core.datapipes import IterDataPipe
 from torchtts.data.core.dataset_builder import GeneratorBasedBuilder
 from torchtts.data.core.dataset_info import DatasetInfo
-from torchtts.utils.data_utils import get_bucket_scheme, lowercase_dict_keys
 
 from data.audio.voice_tokenizer import VoiceBpeTokenizer
-import librosa 
 import torch         
 
 logger = logging.getLogger(__name__)
@@ -82,6 +72,8 @@ class TortoiseDataset(GeneratorBasedBuilder):
         datapipe = datapipe.map(self._process_wav)
         datapipe = datapipe.map(self._tokenize, fn_kwargs={"tokenizer": self.tokenizer})
         datapipe = datapipe.filter(self._filter_unk_text)
+        datapipe = datapipe.filter(self._filter_long_sentence, fn_kwargs={"max_text_tokens": self._config.get("max_text_tokens", 400),
+                                                                          "max_audio_length": self._config.get("max_audio_length", 600 / 22 * 22050)})
         datapipe = datapipe.map(self._release_unnecessary_data)
 
         if shuffle:
@@ -120,21 +112,17 @@ class TortoiseDataset(GeneratorBasedBuilder):
     @staticmethod
     def _process_wav(data):
         audio = data["speech"]
-        data["wav"] = audio
+        data["wav"] = torch.from_numpy(audio)
         data["wav_lengths"] = torch.LongTensor([len(audio)])
-        data["conditioning"] = np.expand_dims(audio, axis=0)
+        data["conditioning"] = data["wav"].unsqueeze(0)
         return data
 
     @staticmethod
     def _tokenize(data, tokenizer):
         text = data["text"]
+        data["original_text"] = text
         tokens = tokenizer.encode(text)
         tokens = torch.IntTensor(tokens)
-
-        if torch.any(tokens <= 1):
-            logger.warning(f"Found <unk> or <pad> in {text}")
-          
-        # assert not torch.any(tokens <= 1) # assert no <unk>, start, end token
         data["text"] = tokens
         data["text_lengths"] = torch.LongTensor([len(tokens)])
         return data
@@ -143,6 +131,15 @@ class TortoiseDataset(GeneratorBasedBuilder):
     def _filter_unk_text(data):
         text = data["text"]
         if torch.any(text <= 1):
+            logger.warning(f"Found <unk> in {data['original_text']}")
+            return False
+        return True
+
+    @staticmethod
+    def _filter_long_sentence(data, max_text_tokens, max_audio_length):
+        text = data["text"]
+        wav = data["wav"]
+        if text.shape[0] > max_text_tokens or wav.shape[0] > max_audio_length:
             return False
         return True
 

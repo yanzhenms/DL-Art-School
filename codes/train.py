@@ -351,7 +351,7 @@ class Trainer:
         while not self._should_stop():
         #for epoch in range(self.start_epoch, self.total_epochs + 1):
             self.epoch = epoch
-            if self.opt['dist']:
+            if self.opt['dist'] and self.opt['datasets']['train']['mode'] != 'torchtts':
                 self.train_sampler.set_epoch(epoch)
 
             tq_ldr = tqdm(self.train_loader) if self.rank <= 0 else self.train_loader
@@ -371,7 +371,7 @@ class Trainer:
         self.logger.info('Start training from epoch: {:d}, iter: {:d}'.format(self.start_epoch, self.current_step))
         for epoch in range(self.start_epoch, self.total_epochs + 1):
             self.epoch = epoch
-            if self.opt['dist']:
+            if self.opt['dist'] and self.opt['datasets']['train']['mode'] != 'torchtts':
                 self.train_sampler.set_epoch(epoch)
             tq_ldr = tqdm(self.train_loader, position=index)
 

@@ -1,11 +1,12 @@
 name: LibriTTS
 model: extensibletrainer
 scale: 1
-gpu_ids: [0] #[0, 1, 2, 3] # <-- unless you have multiple gpus, use this
+#gpu_ids: [0, 1, 2, 3] # <-- unless you have multiple gpus, use this
+gpu_ids: [0] # <-- use this if you only have one gpu
 start_step: 0 # -1 causes 0.pth to be saved!
 checkpointing_enabled: true  # <-- Gradient checkpointing. Enable for huge GPU memory savings. Disable for distributed training.
 fp16: false # TODO: why does enabling this with 8bit slow down perf??
-use_8bit: True
+use_8bit: true
 wandb: false  # <-- enable to log to wandb. tensorboard logging is always enabled.
 use_tb_logger: true
 
@@ -14,7 +15,7 @@ datasets:
     # Data path
     mode: torchtts
     raw_data: /data/yanzhen/LibriTTS
-    data_dir: /data/realisticttsdataset_v2.1/Training/
+    data_dir: /data/stdstoragetts01scus_datablob/realisticttsdataset_v2.1/Training/
     shard_format: tar
     shard_masks: en-us_libriTTSR_*.tar
     shard_name: shards
@@ -25,10 +26,12 @@ datasets:
     n_workers: 2
     pin_memory: True
     dynamic_batch: False
-    # Batch size in frame
-    batch_size: 32
+    # Batch size in samples
+    batch_size: 8
     num_samples: 290000
     vocab_path: ../experiments/bpe_lowercase_asr_256.json
+    mel_norm_file: ../experiments/clips_mel_norms.pth
+    dvae_config: "../experiments/train_diffusion_vocoder_22k_level.yml" # EXTREMELY IMPORTANT
     with_stat_data: True
     with_text_data: True
     with_context_info: True
@@ -116,11 +119,11 @@ path:
 train: # CHANGEME: ALL OF THESE PARAMETERS SHOULD BE EXPERIMENTED WITH
   niter: 50000
   warmup_iter: -1
-  mega_batch_factor: 8    # <-- Gradient accumulation factor. If you are running OOM, increase this to [2,4,8].
+  mega_batch_factor: 4    # <-- Gradient accumulation factor. If you are running OOM, increase this to [2,4,8].
   val_freq: 60 # TODO set this to epoch size * something
 
   default_lr_scheme: MultiStepLR
-  gen_lr_steps: [160, 320, 448, 576] #[50000, 100000, 140000, 180000]
+  gen_lr_steps: [5000, 10000, 20000, 40000] #[50000, 100000, 140000, 180000]
   lr_gamma: 0.5
   ema_enabled: false
   #manual_seed: 1337 # add this if you want reproducibility
@@ -129,8 +132,8 @@ train: # CHANGEME: ALL OF THESE PARAMETERS SHOULD BE EXPERIMENTED WITH
 #   pure: true # see train.py
 
 logger:
-  print_freq: 20 # TODO: set this to epoch size
-  save_checkpoint_freq: 60 # CHANGEME: especially you should increase this it's really slow
+  print_freq: 50 # TODO: set this to epoch size
+  save_checkpoint_freq: 1000 # CHANGEME: especially you should increase this it's really slow
   visuals: [gen, mel] #TODO: figure this out
   visual_debug_rate: 500
   is_mel_spectrogram: true
