@@ -6,6 +6,7 @@ from pathlib import Path
 from torchtts.data.core import features
 from torchtts.data.core.dataset_builder import GeneratorBasedBuilder
 from torchtts.data.core.dataset_info import DatasetInfo
+from torchtts.utils.data_utils import get_bucket_scheme, lowercase_dict_keys
 
 from data.audio.voice_tokenizer import VoiceBpeTokenizer
 import torch         
@@ -120,6 +121,7 @@ class TortoiseDataset(GeneratorBasedBuilder):
     @staticmethod
     def _tokenize(data, tokenizer):
         text = data["text"]
+        #text = text.replace(" ,", ",").replace(" .", ".").replace(" ?", "?").replace(" !", "!")
         data["original_text"] = text
         tokens = tokenizer.encode(text)
         tokens = torch.IntTensor(tokens)
@@ -131,7 +133,7 @@ class TortoiseDataset(GeneratorBasedBuilder):
     def _filter_unk_text(data):
         text = data["text"]
         if torch.any(text <= 1):
-            logger.warning(f"Found <unk> in {data['original_text']}")
+            # logger.warning(f"Found <unk> in {data['original_text']}")
             return False
         return True
 
