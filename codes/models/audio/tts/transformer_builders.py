@@ -45,6 +45,7 @@ class LearnedPositionEmbeddings(nn.Module):
 
     def forward(self, x):
         sl = x.shape[1]
+        assert sl <= self.seq_len, f"Sequence length {sl} is greater than the maximum sequence length {self.seq_len}"
         if self.relative:
             start = random.randint(sl, self.seq_len) - sl
             return self.emb(torch.arange(start, start+sl, device=x.device))

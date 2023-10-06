@@ -18,6 +18,11 @@ def create_dataloader(dataset, dataset_opt, opt=None, sampler=None, collate_fn=N
         else:
             num_workers = dataset_opt['n_workers']
             batch_size = dataset_opt['batch_size']
+        
+        if dataset_opt['mode'] == 'torchtts':
+            from torchtts.data.core.datapipe_loader import DataPipeLoader
+            return DataPipeLoader(dataset=dataset, num_workers=num_workers, pin_memory=pin_memory)
+
         return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
                                            num_workers=num_workers, sampler=sampler, drop_last=True,
                                            pin_memory=pin_memory, collate_fn=collate_fn)
@@ -102,9 +107,17 @@ def create_dataset(dataset_opt, return_collate=False):
         from data.zero_pad_dict_collate import ZeroPadDictCollate as C
         if opt_get(dataset_opt, ['needs_collate'], False):
             collate = C()
+    elif mode == 'torchtts':
+        from torchtts.data.datasets import TortoiseDataset as D
     else:
         raise NotImplementedError('Dataset [{:s}] is not recognized.'.format(mode))
-    dataset = D(dataset_opt)
+    
+    if mode == 'torchtts':
+        dataset = D(**dataset_opt)
+        dataset.prepare_dataset()
+        dataset = dataset.as_data_pipeline()[dataset_opt['split']]
+    else:
+        dataset = D(dataset_opt)
 
     if return_collate:
         return dataset, collate

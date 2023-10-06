@@ -183,8 +183,7 @@ class DiscreteTokenInjector(Injector):
             self.dvae = self.dvae.to(inp.device)
             codes = self.dvae.get_codebook_indices(inp)
             return {self.output: codes}
-
-
+        
 class GptVoiceLatentInjector(Injector):
     """
     This injector does all the legwork to generate latents out of a UnifiedVoice model, including encoding all audio

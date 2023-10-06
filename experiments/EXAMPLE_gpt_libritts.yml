@@ -1,48 +1,40 @@
-name: Test1
+name: LibriTTS
 model: extensibletrainer
 scale: 1
-gpu_ids: [0] # <-- unless you have multiple gpus, use this
+#gpu_ids: [0, 1, 2, 3] # <-- unless you have multiple gpus, use this
+gpu_ids: [0] # <-- use this if you only have one gpu
 start_step: 0 # -1 causes 0.pth to be saved!
 checkpointing_enabled: true  # <-- Gradient checkpointing. Enable for huge GPU memory savings. Disable for distributed training.
 fp16: false # TODO: why does enabling this with 8bit slow down perf??
-use_8bit: True
+use_8bit: true
 wandb: false  # <-- enable to log to wandb. tensorboard logging is always enabled.
 use_tb_logger: true
 
 datasets:
   train:
-    name: TestDataset
-    n_workers: 1 # idk what this does
-    batch_size: 8 # This leads to ~16GB of vram usage on my 3090.
-    mode: paired_voice_audio
-    path: /home/azureuser/work/AudioCraft/dataset/libritts/train.txt
-    fetcher_mode: ['lj'] # CHANGEME if your dataset isn't in LJSpeech format
-    phase: train
-    max_wav_length: 255995
-    max_text_length: 200
+    # Data path
+    mode: torchtts
+    raw_data: /data/yanzhen/LibriTTS
+    data_dir: /data/stdstoragetts01scus_datablob/realisticttsdataset_v2.1/Training/
+    shard_format: tar
+    shard_masks: en-us_libriTTSR_*.tar
+    shard_name: shards
+    split: 'train'  # train or train-dev
+    # Data parameters
+    shard_size: 2000
+    # Dataloader parameters
+    n_workers: 2
+    pin_memory: True
+    dynamic_batch: False
+    # Batch size in samples
+    batch_size: 8
+    num_samples: 290000
+    vocab_path: ../experiments/bpe_lowercase_asr_256.json
+    with_stat_data: True
+    with_text_data: True
+    with_context_info: True
     sample_rate: 22050
-    load_conditioning: True
-    num_conditioning_candidates: 2
-    conditioning_length: 44000
-    use_bpe_tokenizer: True
-    load_aligned_codes: False
-  val:
-    name: TestValidation
-    n_workers: 1
-    batch_size: 2 # this could be higher probably
-    mode: paired_voice_audio
-    path: /home/azureuser/work/AudioCraft/dataset/libritts/val.txt
-    fetcher_mode: ['lj']
-    phase: val # might be broken idk
-    max_wav_length: 255995
-    max_text_length: 200
-    sample_rate: 22050
-    load_conditioning: True
-    num_conditioning_candidates: 2
-    conditioning_length: 44000
-    use_bpe_tokenizer: True
-    load_aligned_codes: False
-
+    lazy_decode: True
 steps:        
   gpt_train:
     training: gpt
@@ -80,7 +72,7 @@ steps:
       paired_fwd_text:
         type: generator
         generator: gpt
-        in: [paired_conditioning_mel, padded_text, text_lengths, paired_mel_codes, wav_lengths]
+        in: [paired_conditioning_mel, text, text_lengths, paired_mel_codes, wav_lengths]
         out: [loss_text_ce, loss_mel_ce, logits]      
     losses:
       text_ce:
@@ -129,17 +121,17 @@ train: # CHANGEME: ALL OF THESE PARAMETERS SHOULD BE EXPERIMENTED WITH
   val_freq: 60 # TODO set this to epoch size * something
 
   default_lr_scheme: MultiStepLR
-  gen_lr_steps: [160, 320, 448, 576] #[50000, 100000, 140000, 180000]
+  gen_lr_steps: [5000, 10000, 20000, 40000] #[50000, 100000, 140000, 180000]
   lr_gamma: 0.5
   ema_enabled: false
   #manual_seed: 1337 # add this if you want reproducibility
 
-eval:
-  pure: true # see train.py
+# eval:
+#   pure: true # see train.py
 
 logger:
-  print_freq: 20 # TODO: set this to epoch size
-  save_checkpoint_freq: 60 # CHANGEME: especially you should increase this it's really slow
+  print_freq: 50 # TODO: set this to epoch size
+  save_checkpoint_freq: 1000 # CHANGEME: especially you should increase this it's really slow
   visuals: [gen, mel] #TODO: figure this out
   visual_debug_rate: 500
   is_mel_spectrogram: true

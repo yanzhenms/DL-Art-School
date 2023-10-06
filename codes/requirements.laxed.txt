@@ -36,7 +36,7 @@ audio2numpy
 SoundFile
 
 # For text stuff
-transformers
+transformers==4.29.2
 tokenizers
 jiwer  # calculating WER
 omegaconf
@@ -54,3 +54,6 @@ x_transformers==1.0.4
 bitsandbytes
 lion-pytorch==0.0.7
 # triton==2.0.0a2
+
+# torchtts dataset
+backoff
