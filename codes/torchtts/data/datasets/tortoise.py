@@ -86,8 +86,18 @@ class TortoiseDataset(GeneratorBasedBuilder):
             break_map = json.load(open(self._config["break_map"], "r"))
             datapipe = datapipe.map(self._break_replace, fn_kwargs={"break_map": break_map})
 
-
-        datapipe = datapipe.batch(self._config["batch_size"])
+        if self._config.get("dynamic_batch", False):
+            # Dynamic batching with bucket
+            batch_size = self._config.get("batch_size", 2000)
+            bucket_step = self._config.get("bucket_step", 1.1)
+            bucket_scheme = get_bucket_scheme(batch_size, 8, bucket_step)
+            datapipe = datapipe.dynamic_batch(
+                group_key_fn=self.get_token_length,
+                bucket_boundaries=bucket_scheme["boundaries"],
+                batch_sizes=bucket_scheme["batch_sizes"],
+            )
+        else:
+            datapipe = datapipe.batch(self._config["batch_size"])
 
         # Shuffle on batch
         if shuffle:
@@ -109,6 +119,10 @@ class TortoiseDataset(GeneratorBasedBuilder):
             }
         )
         return datapipe
+
+    @staticmethod
+    def get_token_length(data):
+        return data["text"].shape[0]
 
     @staticmethod
     def _process_wav(data):
