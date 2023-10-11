@@ -385,8 +385,21 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-opt', type=str, help='Path to option YAML file.', default='../options/train_vit_latent.yml')
     parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none', help='job launcher')
+    parser.add_argument('--model-dir', type=str, required=False, default=None, help='model directory')
+    parser.add_argument('--log-dir', '--logDir', type=str, default=None, help='log directory')
     args = parser.parse_args()
+    
     opt = option.parse(args.opt, is_train=True)
+    # create log directory to save tensorboard
+    # summary written in the default directory can be shown on Philly
+    if args.model_dir is not None:
+        os.makedirs(args.model_dir, exist_ok=True)
+        opt['path']['models'] = args.model_dir
+        opt['path']['training_state'] = args.model_dir
+    if args.log_dir is not None:
+        os.makedirs(args.log_dir, exist_ok=True)
+        opt['path']['log'] = args.log_dir
+
     if args.launcher != 'none':
         # export CUDA_VISIBLE_DEVICES for running in distributed mode.
         if 'gpu_ids' in opt.keys():
