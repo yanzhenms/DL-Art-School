@@ -386,7 +386,7 @@ if __name__ == '__main__':
     parser.add_argument('-opt', type=str, help='Path to option YAML file.', default='../options/train_vit_latent.yml')
     parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none', help='job launcher')
     parser.add_argument('--model-dir', type=str, required=False, default=None, help='model directory')
-    parser.add_argument('--log-dir', '--logDir', type=str, default=None, help='log directory')
+    parser.add_argument('--log-dir', '--logDir', required=False, type=str, default=None, help='log directory')
     args = parser.parse_args()
     
     opt = option.parse(args.opt, is_train=True)
