@@ -232,6 +232,7 @@ class ExtensibleTrainer(BaseModel):
                     v = v[sort_indices]
             if isinstance(v, torch.Tensor):
                 self.dstate[k] = [t.to(self.device) for t in torch.chunk(v, chunks=batch_factor, dim=0)]
+                self.batch_factor = len(self.dstate[k])
 
         if opt_get(self.opt, ['train', 'auto_collate'], False):
             for k, v in self.dstate.items():
