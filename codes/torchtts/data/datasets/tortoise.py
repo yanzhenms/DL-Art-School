@@ -79,9 +79,12 @@ class TortoiseDataset(GeneratorBasedBuilder):
 
         self.tokenizer = VoiceBpeTokenizer(self._config["vocab_path"])
 
-        datapipe = datapipe.map(self._process_wav)
+        datapipe = datapipe.map(self._process_wav, fn_kwargs = {"conditioning_length": self.conditioning_length})
         datapipe = datapipe.map(self._tokenize, fn_kwargs={"tokenizer": self.tokenizer})
         datapipe = datapipe.filter(self._filter_unk_text)
+        datapipe = datapipe.filter(self._filter_long_sentence, fn_kwargs={"max_text_tokens": self._config.get("max_text_tokens", 400),
+                                                                          "max_audio_length": self._config.get("max_audio_length", 600 / 22 * 22050)})
+        datapipe = datapipe.map(self._rename_and_resize)
         datapipe = datapipe.map(self._release_unnecessary_data)
 
         if shuffle:
@@ -118,11 +121,22 @@ class TortoiseDataset(GeneratorBasedBuilder):
         return datapipe
 
     @staticmethod
-    def _process_wav(data):
+    def _process_wav(data, conditioning_length):
         audio = data["speech"]
-        data["wav"] = audio
+        data["wav"] = np.expand_dims(audio,axis=0)
         data["wav_lengths"] = torch.LongTensor([len(audio)])
-        data["conditioning"] = np.expand_dims(audio, axis=0)
+        #data["conditioning"] = np.expand_dims(audio, axis=0)
+        gap = audio.shape[-1] - conditioning_length
+        if gap>0:
+            rand_start = random.randint(0, gap)
+            cond = audio[rand_start:rand_start+conditioning_length]
+            data["conditioning"] = cond
+        else:
+            data["conditioning"] = audio
+        
+        data["conditioning"] = np.expand_dims(data["conditioning"], axis=0)
+
+
         return data
 
     @staticmethod
@@ -145,10 +159,28 @@ class TortoiseDataset(GeneratorBasedBuilder):
         if torch.any(text <= 1):
             return False
         return True
+    
+    @staticmethod
+    def _filter_long_sentence(data, max_text_tokens, max_audio_length):
+        text = data["text"]
+        wav = data["wav"]
+        if text.shape[-1] > max_text_tokens or wav.shape[-1] > max_audio_length:
+            return False
+        return True
+    
+    @staticmethod
+    def _rename_and_resize(data):
+        data["text"] = np.squeeze(data["text"])
+        data["wav_lengths"] = np.squeeze(data["wav_lengths"])
+        data["text_lengths"] = np.squeeze(data["text_lengths"])
+        data["skipped_items"] = 0
+        data["conditioning_contains_self"]= 1
+
+        return data
 
     @staticmethod
     def _release_unnecessary_data(data):
-        necessary_keys = ["wav", "wav_lengths", "text", "text_lengths", "conditioning"]
+        necessary_keys = ["wav", "wav_lengths", "text", "text_lengths", "conditioning","skipped_items", "conditioning_contains_self"]
         for key in list(data.keys()):
             if key not in necessary_keys:
                 del data[key]

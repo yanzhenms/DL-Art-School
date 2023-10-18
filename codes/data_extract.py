@@ -9,6 +9,7 @@ import shutil
 from tqdm import tqdm
 
 import torch
+import torchaudio
 from data.data_sampler import DistIterSampler
 from trainer.eval.evaluator import create_evaluator
 
@@ -364,11 +365,16 @@ class Trainer:
                 # max_txt_len = max(max_txt_len,train_data['text_lengths'].max())
                 # print('max_wav_len = ',max_wav_len)
                 # print('max_txt_len = ', max_txt_len)
+                print(train_data['wav'].shape)
+                for i in range(train_data['wav'].shape[0]):
+                    data_path = '../experiments/sydney_diffusion_data/'
+                    torchaudio.save(os.path.join(data_path, f'{i}.wav'), train_data['wav'][i], 22050)
                 if train_data['wav_lengths'].shape[0] < self.opt['datasets']['train']['batch_size']:
                     self.logger.warning("Not reaching batch size")
                     continue
-                self.do_step(train_data)
+                break
             epoch += 1
+            break
 
     def _should_stop(self):
         if self.total_iters > 0:
