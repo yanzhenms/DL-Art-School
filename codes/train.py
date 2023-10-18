@@ -364,9 +364,9 @@ class Trainer:
                 # max_txt_len = max(max_txt_len,train_data['text_lengths'].max())
                 # print('max_wav_len = ',max_wav_len)
                 # print('max_txt_len = ', max_txt_len)
-                if train_data['wav_lengths'].shape[0] < self.opt['datasets']['train']['batch_size']:
-                    self.logger.warning("Not reaching batch size")
-                    continue
+                # if train_data['wav_lengths'].shape[0] < self.opt['datasets']['train']['batch_size']:
+                #     self.logger.warning("Not reaching batch size")
+                #     continue
                 self.do_step(train_data)
             epoch += 1
 
