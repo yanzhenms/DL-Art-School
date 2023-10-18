@@ -426,7 +426,7 @@ class GaussianDiffusion:
     def _predict_xstart_from_vector_field(self, x_t, t, u):
         assert x_t.shape == u.shape
         dt = 1-t
-        while len(dt.shape) < len(x_t):
+        while len(dt.shape) < len(x_t.shape):
             dt = dt[..., None]
         return x_t + dt * u
         
