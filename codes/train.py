@@ -353,8 +353,8 @@ class Trainer:
         while not self._should_stop():
         #for epoch in range(self.start_epoch, self.total_epochs + 1):
             self.epoch = epoch
-            # if self.opt['dist']:
-                # self.train_sampler.set_epoch(epoch)
+            if self.opt['dist'] and self.opt['datasets']['train']['mode'] != 'torchtts':
+                self.train_sampler.set_epoch(epoch)
 
             tq_ldr = tqdm(self.train_loader) if self.rank <= 0 else self.train_loader
 
@@ -380,7 +380,7 @@ class Trainer:
         self.logger.info('Start training from epoch: {:d}, iter: {:d}'.format(self.start_epoch, self.current_step))
         for epoch in range(self.start_epoch, self.total_epochs + 1):
             self.epoch = epoch
-            if self.opt['dist']:
+            if self.opt['dist'] and self.opt['datasets']['train']['mode'] != 'torchtts':
                 self.train_sampler.set_epoch(epoch)
             tq_ldr = tqdm(self.train_loader, position=index)
 
@@ -394,8 +394,21 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-opt', type=str, help='Path to option YAML file.', default='../options/train_vit_latent.yml')
     parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none', help='job launcher')
+    parser.add_argument('--model-dir', type=str, required=False, default=None, help='model directory')
+    parser.add_argument('--log-dir', '--logDir', required=False, type=str, default=None, help='log directory')
     args = parser.parse_args()
+    
     opt = option.parse(args.opt, is_train=True)
+    # create log directory to save tensorboard
+    # summary written in the default directory can be shown on Philly
+    if args.model_dir is not None:
+        os.makedirs(args.model_dir, exist_ok=True)
+        opt['path']['models'] = args.model_dir
+        opt['path']['training_state'] = args.model_dir
+    if args.log_dir is not None:
+        os.makedirs(args.log_dir, exist_ok=True)
+        opt['path']['log'] = args.log_dir
+
     if args.launcher != 'none':
         # export CUDA_VISIBLE_DEVICES for running in distributed mode.
         if 'gpu_ids' in opt.keys():

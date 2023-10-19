@@ -1,23 +1,14 @@
-import csv
 import json
-import os
-import re
-import random
-from itertools import chain
-from more_itertools import split_before, windowed
-
 import numpy as np
 import logging
 from pathlib import Path
-
+from transformers import AutoTokenizer
 from torchtts.data.core import features
-from torchtts.data.core.datapipes import IterDataPipe
 from torchtts.data.core.dataset_builder import GeneratorBasedBuilder
 from torchtts.data.core.dataset_info import DatasetInfo
 from torchtts.utils.data_utils import get_bucket_scheme, lowercase_dict_keys
 
 from data.audio.voice_tokenizer import VoiceBpeTokenizer
-import librosa 
 import torch         
 
 logger = logging.getLogger(__name__)
@@ -76,15 +67,18 @@ class TortoiseDataset(GeneratorBasedBuilder):
         self.conditioning_length = self._config.get("conditioning_length", 44100)
         self.load_aligned_codes = self._config.get("load_aligned_codes", False)
         self.aligned_codes_to_audio_ratio = self._config.get("aligned_codes_ratio", 443)
+        datapipe = datapipe.map(self._process_wav)
+        
+        if self._config.get("use_t5_tokenizer", False):
+            self.tokenizer = AutoTokenizer.from_pretrained(self._config.get("t5_model", "google/flan-t5-base"))
+            datapipe = datapipe.map(self._tokenize_t5, fn_kwargs={"t5_tokenizer": self.tokenizer})
+        else:
+            self.tokenizer = VoiceBpeTokenizer(self._config["vocab_path"])
+            datapipe = datapipe.map(self._tokenize, fn_kwargs={"tokenizer": self.tokenizer})
+            datapipe = datapipe.filter(self._filter_unk_text)
 
-        self.tokenizer = VoiceBpeTokenizer(self._config["vocab_path"])
-
-        datapipe = datapipe.map(self._process_wav, fn_kwargs = {"conditioning_length": self.conditioning_length})
-        datapipe = datapipe.map(self._tokenize, fn_kwargs={"tokenizer": self.tokenizer})
-        datapipe = datapipe.filter(self._filter_unk_text)
         datapipe = datapipe.filter(self._filter_long_sentence, fn_kwargs={"max_text_tokens": self._config.get("max_text_tokens", 400),
                                                                           "max_audio_length": self._config.get("max_audio_length", 600 / 22 * 22050)})
-        datapipe = datapipe.map(self._rename_and_resize)
         datapipe = datapipe.map(self._release_unnecessary_data)
 
         if shuffle:
@@ -96,8 +90,18 @@ class TortoiseDataset(GeneratorBasedBuilder):
             break_map = json.load(open(self._config["break_map"], "r"))
             datapipe = datapipe.map(self._break_replace, fn_kwargs={"break_map": break_map})
 
-
-        datapipe = datapipe.batch(self._config["batch_size"])
+        if self._config.get("dynamic_batch", False):
+            # Dynamic batching with bucket
+            batch_size = self._config.get("batch_size", 2000)
+            bucket_step = self._config.get("bucket_step", 1.1)
+            bucket_scheme = get_bucket_scheme(batch_size, 8, bucket_step)
+            datapipe = datapipe.dynamic_batch(
+                group_key_fn=self.get_token_length,
+                bucket_boundaries=bucket_scheme["boundaries"],
+                batch_sizes=bucket_scheme["batch_sizes"],
+            )
+        else:
+            datapipe = datapipe.batch(self._config["batch_size"])
 
         # Shuffle on batch
         if shuffle:
@@ -121,34 +125,33 @@ class TortoiseDataset(GeneratorBasedBuilder):
         return datapipe
 
     @staticmethod
-    def _process_wav(data, conditioning_length):
+    def get_token_length(data):
+        return data["text"].shape[0]
+
+    @staticmethod
+    def _process_wav(data):
         audio = data["speech"]
-        data["wav"] = np.expand_dims(audio,axis=0)
+        data["wav"] = torch.from_numpy(audio)
         data["wav_lengths"] = torch.LongTensor([len(audio)])
-        #data["conditioning"] = np.expand_dims(audio, axis=0)
-        gap = audio.shape[-1] - conditioning_length
-        if gap>0:
-            rand_start = random.randint(0, gap)
-            cond = audio[rand_start:rand_start+conditioning_length]
-            data["conditioning"] = cond
-        else:
-            data["conditioning"] = audio
-        
-        data["conditioning"] = np.expand_dims(data["conditioning"], axis=0)
-
-
+        data["conditioning"] = data["wav"].unsqueeze(0)
+        return data
+    
+    @staticmethod
+    def _tokenize_t5(data, t5_tokenizer):
+        text = data["text"]
+        returns = t5_tokenizer(text, return_tensors="pt")
+        data['original_text'] = text
+        data['text'] = returns['input_ids'].squeeze(0)
+        data['text_lengths'] = torch.LongTensor([len(returns['input_ids'])])
         return data
 
     @staticmethod
     def _tokenize(data, tokenizer):
         text = data["text"]
+        #text = text.replace(" ,", ",").replace(" .", ".").replace(" ?", "?").replace(" !", "!")
+        data["original_text"] = text
         tokens = tokenizer.encode(text)
         tokens = torch.IntTensor(tokens)
-
-        if torch.any(tokens <= 1):
-            logger.warning(f"Found <unk> or <pad> in {text}")
-          
-        # assert not torch.any(tokens <= 1) # assert no <unk>, start, end token
         data["text"] = tokens
         data["text_lengths"] = torch.LongTensor([len(tokens)])
         return data
@@ -157,6 +160,15 @@ class TortoiseDataset(GeneratorBasedBuilder):
     def _filter_unk_text(data):
         text = data["text"]
         if torch.any(text <= 1):
+            # logger.warning(f"Found <unk> in {data['original_text']}")
+            return False
+        return True
+
+    @staticmethod
+    def _filter_long_sentence(data, max_text_tokens, max_audio_length):
+        text = data["text"]
+        wav = data["wav"]
+        if text.shape[0] > max_text_tokens or wav.shape[0] > max_audio_length:
             return False
         return True
     
