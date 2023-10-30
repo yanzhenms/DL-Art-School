@@ -217,6 +217,22 @@ class GaussianDiffusion:
             * np.sqrt(alphas)
             / (1.0 - self.alphas_cumprod)
         )
+        # coefficients of consistency model (based on EDM )
+        self.P_std = 1.2
+        self.P_mean = -1.2
+        self.sigma_data = 0.5
+
+        self.sigma_min = 0.002
+        self.sigma_max = 80
+        self.rho = 7
+        self.N = 100
+
+        # Time step discretization
+        step_indices = th.arange(self.N )   
+        t_steps = (self.sigma_min ** (1 / self.rho) + step_indices / (self.N - 1) * (self.sigma_max ** (1 / self.rho) - self.sigma_min ** (1 / self.rho))) ** self.rho
+        self.t_steps = th.cat([th.zeros_like(t_steps[:1]), th.as_tensor(t_steps)])  
+
+
 
     def q_mean_variance(self, x_start, t):
         """
@@ -1126,6 +1142,55 @@ class GaussianDiffusion:
 
         return terms
 
+    def EDM_training_losses(self, model, x_start, model_kwargs=None):
+        """
+        Compute training losses for a single timestep.
+
+        :param model: the model to evaluate loss on.
+        :param x_start: the [N x C x ...] tensor of inputs.
+        :param t: a batch of timestep indices.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :param noise: if specified, the specific Gaussian noise to try to remove.
+        :return: a dict with the key "loss" containing a tensor of shape [N].
+                 Some mean or variance settings may also have other keys.
+        """
+        if model_kwargs is None:
+            model_kwargs = {}
+
+        terms = {}
+        rnd_normal = th.randn([x_start.shape[0], 1,  1], device=x_start.device)
+        sigma = (rnd_normal * self.P_std + self.P_mean).exp() # sample sigma
+        weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
+        x_t = x_start +th.randn_like(x_start) * sigma # sample noise
+        
+        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
+        c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
+        c_noise = sigma.log() / 4
+
+        # calculate model output
+        model_outputs = model((c_in*x_t), c_noise.flatten(), **model_kwargs)
+        if isinstance(model_outputs, tuple):
+            model_output = model_outputs[0]
+            terms['extra_outputs'] = model_outputs[1:]
+        else:
+            model_output = model_outputs
+        B, C = x_t.shape[:2]
+        assert model_output.shape == (B, C * 2, *x_t.shape[2:])
+        F_x, _ = th.split(model_output, C, dim=1)
+        
+        D_x = c_skip * x_t + c_out * F_x
+        assert D_x.shape == x_start.shape
+        s_err = (weight * ((D_x - x_start) ** 2))
+        terms["mse_by_batch"] = s_err.reshape(s_err.shape[0], -1).mean(dim=1)
+        terms["mse"] = mean_flat(s_err)
+        terms["vb"] = th.tensor(0.0)
+        terms["x_start_predicted"] =  D_x
+        terms["loss"] = terms["mse"]
+
+        return terms
+    
     def _prior_bpd(self, x_start):
         """
         Get the prior KL term for the variational lower-bound, measured in

@@ -100,9 +100,9 @@ class GaussianDiffusionInjector(Injector):
                                                                    channel_balancing_fn=self.channel_balancing_fn,
                                                                           causal_slope=slope)
             else:
-                diffusion_outputs = self.diffusion.training_losses(gen, hq, t, model_kwargs=model_inputs,
-                                                                   channel_balancing_fn=self.channel_balancing_fn)
-
+                # diffusion_outputs = self.diffusion.training_losses(gen, hq, t, model_kwargs=model_inputs,
+                #                                                    channel_balancing_fn=self.channel_balancing_fn)
+                diffusion_outputs = self.diffusion.EDM_training_losses(gen, hq, model_kwargs=model_inputs)
             if isinstance(sampler, LossAwareSampler):
                 sampler.update_with_local_losses(t, diffusion_outputs['loss'])
             if len(self.extra_model_output_keys) > 0:
