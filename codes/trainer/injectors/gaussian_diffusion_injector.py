@@ -1,6 +1,6 @@
 import functools
 import random
-
+import copy
 import torch
 from torch.cuda.amp import autocast
 
@@ -79,7 +79,10 @@ class GaussianDiffusionInjector(Injector):
 
     def forward(self, state):
         gen = self.env['generators'][self.opt['generator']]
+        model_pretrained = self.env['generators']['ddpm_teacher']
+        model_ema = self.env['generators']['ddpm_emat']
         hq = state[self.input]
+        grad_accum_step = self.env['grad_accum_step']
         assert hq.max() < 1.000001 or hq.min() > -1.00001, f"Attempting to train gaussian diffusion on un-normalized inputs. This won't work, silly! {hq.min()} {hq.max()}"
 
         with autocast(enabled=self.env['opt']['fp16']):
@@ -102,7 +105,8 @@ class GaussianDiffusionInjector(Injector):
             else:
                 # diffusion_outputs = self.diffusion.training_losses(gen, hq, t, model_kwargs=model_inputs,
                 #                                                    channel_balancing_fn=self.channel_balancing_fn)
-                diffusion_outputs = self.diffusion.EDM_training_losses(gen, hq, model_kwargs=model_inputs)
+                # diffusion_outputs = self.diffusion.EDM_training_losses(gen, hq, model_kwargs=model_inputs)
+                diffusion_outputs = self.diffusion.CT_distillation_losses(grad_accum_step, gen, model_ema, model_pretrained, hq, model_kwargs=model_inputs)
             if isinstance(sampler, LossAwareSampler):
                 sampler.update_with_local_losses(t, diffusion_outputs['loss'])
             if len(self.extra_model_output_keys) > 0:

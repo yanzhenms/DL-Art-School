@@ -1179,7 +1179,6 @@ class GaussianDiffusion:
         B, C = x_t.shape[:2]
         assert model_output.shape == (B, C * 2, *x_t.shape[2:])
         F_x, _ = th.split(model_output, C, dim=1)
-        
         D_x = c_skip * x_t + c_out * F_x
         assert D_x.shape == x_start.shape
         s_err = (weight * ((D_x - x_start) ** 2))
@@ -1191,6 +1190,78 @@ class GaussianDiffusion:
 
         return terms
     
+    def EDMPrecond(self, model, x_t, sigma, model_kwargs=None):
+        
+        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
+        c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
+        c_noise = sigma.log() / 4
+
+        # calculate model output
+        model_outputs = model((c_in*x_t), c_noise.flatten(), **model_kwargs)
+        if isinstance(model_outputs, tuple):
+            model_output = model_outputs[0]
+            extra = model_outputs[1:]
+        else:
+            model_output = model_outputs
+        B, C = x_t.shape[:2]
+        assert model_output.shape == (B, C * 2, *x_t.shape[2:])
+        F_x, _ = th.split(model_output, C, dim=1)
+        D_x = c_skip * x_t + c_out * F_x
+        return D_x, extra
+    
+    def CT_distillation_losses(self, grad_accum_step=0,model=None, model_ema=None, model_pretrained=None, x_start=None, model_kwargs=None):
+        """
+        Compute training losses for a single timestep.
+
+        :param model: the model to evaluate loss on.
+        :param model_ema
+        :param model_pretrained
+        :param x_start: the [N x C x ...] tensor of inputs.
+        :param t: a batch of timestep indices.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :param noise: if specified, the specific Gaussian noise to try to remove.
+        :return: a dict with the key "loss" containing a tensor of shape [N].
+                 Some mean or variance settings may also have other keys.
+        """
+        terms = {}
+        # print('model: ',list(model.parameters())[-1][0].cpu().item())
+        # print('model_ema: ', list(model_ema.parameters())[-1][0].cpu().item())
+        # initialize model ema
+        if grad_accum_step == 0:
+            with torch.no_grad():
+                mu = 0.999
+                for p, ema_p in zip(model.parameters(), model_ema.parameters()):
+                    ema_p.mul_(mu).add_(p, alpha=1 - mu)
+            
+        
+        n = torch.randint(1, self.N, (x_start.shape[0],)) # sample timesteps)
+        z = torch.randn_like(x_start) # sample noise
+        tn_1 = self.t_steps[n + 1].reshape(-1, 1, 1).to(x_start.device) # t_n+1
+        x_t = x_start +tn_1*z
+        f_theta,extra = self.EDMPrecond(model, x_t, tn_1, model_kwargs=model_kwargs)
+
+        with torch.no_grad():
+            tn = self.t_steps[n].reshape(-1, 1, 1).to(x_start.device)
+            #euler step
+            x_hat = x_start + tn_1 * z
+            denoised,_ = self.EDMPrecond(model_pretrained, x_hat, tn_1 , model_kwargs=model_kwargs) 
+            d_cur = (x_hat - denoised) / tn_1
+            y_tn = x_hat + (tn - tn_1) * d_cur
+            f_theta_ema,_ = self.EDMPrecond( model_ema, y_tn, tn, model_kwargs=model_kwargs)
+
+        s_err =   (f_theta - f_theta_ema.detach()) ** 2 
+        terms["mse_by_batch"] = s_err.reshape(s_err.shape[0], -1).mean(dim=1)
+        terms["mse"] = mean_flat(s_err)
+        terms["vb"] = th.tensor(0.0)
+        terms["x_start_predicted"] = f_theta
+        terms["loss"] = terms["mse"]
+        terms['extra_outputs'] = extra
+
+        return terms
+
+
     def _prior_bpd(self, x_start):
         """
         Get the prior KL term for the variational lower-bound, measured in

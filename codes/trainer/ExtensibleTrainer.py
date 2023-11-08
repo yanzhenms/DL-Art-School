@@ -550,7 +550,22 @@ class ExtensibleTrainer(BaseModel):
                         self.emas[name] = self.emas[name].cpu()
                 if hasattr(net.module, 'network_loaded'):
                     net.module.network_loaded()
+        # net = self.netsG['ddpm_teacher']
+        # load_path = '/data/chong/dlas/DL-Art-School/experiments/sydney_como/models/51200_ddpm.pth'
+        # self.load_network(load_path)
+        # if hasattr(net.module, 'network_loaded'):
+        #             net.module.network_loaded()
 
+        # net = self.netsG['ddpm_ema']
+        # load_path  = '/data/chong/dlas/DL-Art-School/experiments/sydney_como_distill/models/384_ddpm_ema.pth'
+        # self.load_network(load_path)
+        # if hasattr(net.module, 'network_loaded'):
+        #             net.module.network_loaded()
+        # for param in self.netsG['ddpm_teacher']:
+        #     param.requires_grad = False
+        # for param in self.netsG['ddpm_emat']:
+        #     param.requires_grad = False
+        
     def limit_number_of_checkpoints_and_states(
             self, network_name: Union[str, Literal['ddpm', 'gpt']], models_number: int = 2, state_number: int = 2
     ) -> None:
