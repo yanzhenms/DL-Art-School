@@ -56,7 +56,7 @@ class LearnedPositionEmbeddings(nn.Module):
         return self.emb(torch.tensor([ind], device=dev)).unsqueeze(0)
 
 
-def build_hf_gpt_transformer(layers, model_dim, heads, max_mel_seq_len, max_text_seq_len, checkpointing):
+def build_hf_gpt_transformer(layers, model_dim, heads, max_mel_seq_len, max_text_seq_len, checkpointing, use_cross_attention=False):
     """
     GPT-2 implemented by the HuggingFace library.
     """
@@ -68,7 +68,8 @@ def build_hf_gpt_transformer(layers, model_dim, heads, max_mel_seq_len, max_text
                              n_layer=layers,
                              n_head=heads,
                              gradient_checkpointing=checkpointing,
-                             use_cache=not checkpointing)
+                             use_cache=not checkpointing,
+                             add_cross_attention=use_cross_attention)
     gpt = GPT2Model(gpt_config)
     # Override the built in positional embeddings
     del gpt.wpe
@@ -77,7 +78,10 @@ def build_hf_gpt_transformer(layers, model_dim, heads, max_mel_seq_len, max_text
     del gpt.wte
 
     mel_pos_emb = LearnedPositionEmbeddings(max_mel_seq_len, model_dim) if max_mel_seq_len != -1 else functools.partial(null_position_embeddings, dim=model_dim)
-    text_pos_emb = LearnedPositionEmbeddings(max_text_seq_len, model_dim) if max_mel_seq_len != -1 else functools.partial(null_position_embeddings, dim=model_dim)
+    if use_cross_attention:
+        text_pos_emb = None
+    else:
+        text_pos_emb = LearnedPositionEmbeddings(max_text_seq_len, model_dim) if max_mel_seq_len != -1 else functools.partial(null_position_embeddings, dim=model_dim)
     return gpt, mel_pos_emb, text_pos_emb, None, None
 
 

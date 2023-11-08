@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from transformers import GPT2Config, GPT2PreTrainedModel
+from transformers import GPT2Config, GPT2PreTrainedModel, T5EncoderModel
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 from transformers.utils.model_parallel_utils import get_device_map, assert_device_map
@@ -12,7 +12,9 @@ from models.audio.tts.transformer_builders import build_hf_gpt_transformer
 from models.lucidrains.x_transformers import RotaryEmbedding, apply_rotary_pos_emb
 from trainer.networks import register_model
 from utils.util import opt_get
-
+import typing as tp
+import sys
+sys.setrecursionlimit(10000) #
 import maybe_bnb as mbnb
 
 class ResBlock(nn.Module):
@@ -32,6 +34,15 @@ class ResBlock(nn.Module):
     def forward(self, x):
         return F.relu(self.net(x) + x)
 
+def get_contributing_params(y, top_level=True):
+    nf = y.grad_fn.next_functions if top_level else y.next_functions
+    for f, _ in nf:
+        try:
+            yield f.variable
+        except AttributeError:
+            pass  # node has no tensor
+        if f is not None:
+            yield from get_contributing_params(f, top_level=False)
 
 class GPT2InferenceModel(GPT2PreTrainedModel):
     def __init__(self, config, gpt, text_pos_emb, embeddings, norm, linear):
@@ -213,6 +224,64 @@ class ConditioningEncoder(nn.Module):
         else:
             return h[:, :, 0]
 
+class T5ConditioningEncoder(nn.Module):
+    """T5-based TextConditioner.
+
+    Args:
+        name (str): Name of the T5 model.
+        output_dim (int): Output dim of the conditioner.
+        finetune (bool): Whether to fine-tune T5 at train time.
+        device (str): Device for T5 Conditioner.
+        autocast_dtype (tp.Optional[str], optional): Autocast dtype.
+        word_dropout (float, optional): Word dropout probability.
+        normalize_text (bool, optional): Whether to apply text normalization.
+    """
+    MODELS = ["t5-small", "t5-base", "t5-large", "t5-3b", "t5-11b",
+              "google/flan-t5-small", "google/flan-t5-base", "google/flan-t5-large",
+              "google/flan-t5-xl", "google/flan-t5-xxl", "google/byt5-small", "google/byt5-base", "google/byt5-large"]
+    MODELS_DIMS = {
+        "t5-small": 512,
+        "t5-base": 768,
+        "t5-large": 1024,
+        "t5-3b": 1024,
+        "t5-11b": 1024,
+        "google/flan-t5-small": 512,
+        "google/flan-t5-base": 768,
+        "google/flan-t5-large": 1024,
+        "google/flan-t5-3b": 1024,
+        "google/flan-t5-11b": 1024,
+        "google/byt5-small": 1472,
+        "google/byt5-base": 1536,
+        "google/byt5-large": 1536,
+    }
+
+    def __init__(self, name: str, output_dim: int, finetune: bool):
+        assert name in self.MODELS, f"Unknown T5 model {name}."
+        super().__init__()
+        self.name = name
+        self.finetune = finetune
+        t5 = T5EncoderModel.from_pretrained(name).train(mode=finetune)
+        if finetune:
+            self.t5 = t5
+        else:
+            self.__dict__['t5'] = t5
+        self.output_proj = nn.Linear(self.MODELS_DIMS[name], output_dim)
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        with torch.set_grad_enabled(self.finetune):
+            non_pad_mask = input_ids != 0
+            embeds = self.t5(input_ids=input_ids, attention_mask=non_pad_mask).last_hidden_state
+        embeds = self.output_proj(embeds)
+        embeds = (embeds * non_pad_mask.unsqueeze(-1))
+        return embeds
+    
+    def to(self, *args, **kwargs):
+        # override to() to move the model to the right device when not finetuning
+        self = super().to(*args, **kwargs)
+        if not self.finetune:
+            # still need to move the model to the right device
+            self.t5 = self.t5.to(*args, **kwargs)
+        return self
 
 class MelEncoder(nn.Module):
     def __init__(self, channels, mel_channels=80, resblocks_per_reduction=2):
@@ -244,7 +313,7 @@ class UnifiedVoice(nn.Module):
                  start_text_token=255, stop_text_token=0, number_mel_codes=8194, start_mel_token=8192,
                  stop_mel_token=8193, train_solo_embeddings=False, use_mel_codes_as_input=True,
                  checkpointing=True, average_conditioning_embeddings=False, freeze_everything_but_position_embeddings=False,
-                 tortoise_compat=True):
+                 tortoise_compat=True, use_cross_attention=False, t5_model="google/flan-t5-base", fine_tune_t5=True):
         """
         Args:
             layers: Number of layers in transformer stack.
@@ -284,14 +353,21 @@ class UnifiedVoice(nn.Module):
         self.conditioning_encoder = ConditioningEncoder(80, model_dim, num_attn_heads=heads)
         self.average_conditioning_embeddings = average_conditioning_embeddings
         # nn.Embedding
-        self.text_embedding = mbnb.nn.Embedding(self.number_text_tokens, model_dim)
+        if not use_cross_attention:
+            self.text_embedding = mbnb.nn.Embedding(self.number_text_tokens, model_dim)
+
         if use_mel_codes_as_input:
             # nn.Embedding
             self.mel_embedding = mbnb.nn.Embedding(self.number_mel_codes, model_dim)
         else:
             self.mel_embedding = MelEncoder(model_dim, resblocks_per_reduction=1)
+
+        self.use_cross_attention = use_cross_attention
+        if use_cross_attention:
+            self.encoder = T5ConditioningEncoder(t5_model, model_dim, finetune=fine_tune_t5)
+
         self.gpt, self.mel_pos_embedding, self.text_pos_embedding, self.mel_layer_pos_embedding, self.text_layer_pos_embedding = \
-            build_hf_gpt_transformer(layers, model_dim, heads, self.max_mel_tokens, self.max_text_tokens, checkpointing)
+            build_hf_gpt_transformer(layers, model_dim, heads, self.max_mel_tokens, self.max_text_tokens, checkpointing, use_cross_attention)
         if train_solo_embeddings:
             self.mel_solo_embedding = nn.Parameter(torch.randn(1, 1, model_dim) * .02, requires_grad=True)
             self.text_solo_embedding = nn.Parameter(torch.randn(1, 1, model_dim) * .02, requires_grad=True)
@@ -300,11 +376,16 @@ class UnifiedVoice(nn.Module):
             self.text_solo_embedding = 0
 
         self.final_norm = nn.LayerNorm(model_dim)
-        self.text_head = mbnb.nn.Linear(model_dim, self.number_text_tokens)
+        if not use_cross_attention:
+            self.text_head = mbnb.nn.Linear(model_dim, self.number_text_tokens)
         self.mel_head = mbnb.nn.Linear(model_dim, self.number_mel_codes)
 
         # Initialize the embeddings per the GPT-2 scheme
-        embeddings = [self.text_embedding]
+        if not use_cross_attention:
+            embeddings = [self.text_embedding]
+        else:
+            embeddings = []
+
         if use_mel_codes_as_input:
             embeddings.append(self.mel_embedding)
         for module in embeddings:
@@ -320,6 +401,14 @@ class UnifiedVoice(nn.Module):
                     p.requires_grad = True
 
     def get_grad_norm_parameter_groups(self):
+        if self.use_cross_attention:
+            return {
+                'conditioning_encoder': list(self.conditioning_encoder.parameters()),
+                'encoder': list(self.encoder.parameters()),
+                'gpt': list(self.gpt.parameters()),
+                'heads': list(self.mel_head.parameters()),
+            }
+
         return {
             'conditioning_encoder': list(self.conditioning_encoder.parameters()),
             'gpt': list(self.gpt.parameters()),
@@ -372,6 +461,24 @@ class UnifiedVoice(nn.Module):
         else:
             return first_logits
 
+    def get_logits_w_cross_attention(self, speech_conditioning_inputs, text_emb, text_non_pad_mask, mel_emb, get_attns=False, return_latent=False):
+        emb = torch.cat([speech_conditioning_inputs, mel_emb], dim=1)
+        gpt_out = self.gpt(inputs_embeds=emb, return_dict=True, output_attentions=get_attns, encoder_hidden_states=text_emb, encoder_attention_mask=text_non_pad_mask)
+
+        if get_attns:
+            return gpt_out.attentions
+        
+        enc = gpt_out.last_hidden_state[:, 1:]  # The first logit is tied to the speech_conditioning_input
+        enc = self.final_norm(enc)
+
+        if return_latent:
+            return enc[:, :mel_emb.shape[1]]
+        
+        mel_logits = enc[:, :mel_emb.shape[1]]
+        mel_logits = self.mel_head(mel_logits)
+        mel_logits = mel_logits.permute(0,2,1)
+        return mel_logits
+
     def forward(self, speech_conditioning_input, text_inputs, text_lengths, mel_codes, wav_lengths, text_first=True, raw_mels=None, return_attentions=False,
                 return_latent=False):
         """
@@ -393,8 +500,9 @@ class UnifiedVoice(nn.Module):
         
         # This model will receive micro-batches with a ton of padding for both the text and MELs. Ameliorate this by
         # chopping the inputs by the maximum actual length.
-        max_text_len = text_lengths.max()
-        text_inputs = F.pad(text_inputs[:, :max_text_len], (0,1), value=self.stop_text_token)
+        if not self.use_cross_attention:
+            max_text_len = text_lengths.max()
+            text_inputs = F.pad(text_inputs[:, :max_text_len], (0,1), value=self.stop_text_token)
         max_mel_len = wav_lengths.max() // self.mel_length_compression
         mel_codes = F.pad(mel_codes[:, :max_mel_len], (0,1), value=self.stop_mel_token)
         if raw_mels is not None:
@@ -409,8 +517,12 @@ class UnifiedVoice(nn.Module):
         if self.average_conditioning_embeddings:
             conds = conds.mean(dim=1).unsqueeze(1)
 
-        text_inputs, text_targets = self.build_aligned_inputs_and_targets(text_inputs, self.start_text_token, self.stop_text_token)
-        text_emb = self.text_embedding(text_inputs) + self.text_pos_embedding(text_inputs)
+        if not self.use_cross_attention:
+            text_inputs, text_targets = self.build_aligned_inputs_and_targets(text_inputs, self.start_text_token, self.stop_text_token)
+            text_emb = self.text_embedding(text_inputs) + self.text_pos_embedding(text_inputs)
+        else:
+            text_emb = self.encoder(text_inputs)
+
         mel_codes, mel_targets = self.build_aligned_inputs_and_targets(mel_codes, self.start_mel_token, self.stop_mel_token)
         if raw_mels is not None:
             mel_inp = F.pad(raw_mels, (0, 8))
@@ -420,7 +532,13 @@ class UnifiedVoice(nn.Module):
         mel_emb = mel_emb + self.mel_pos_embedding(mel_codes)
 
         sub = -2 if self.tortoise_compat else -1
-        if text_first:
+
+        if self.use_cross_attention:
+            mel_logits = self.get_logits_w_cross_attention(conds, text_emb, text_inputs != 0, mel_emb, get_attns=return_attentions, return_latent=return_latent)
+            if return_latent:
+                return mel_logits[:, :sub]  # Despite the name, these are not logits.
+
+        elif text_first:
             text_logits, mel_logits = self.get_logits(conds, text_emb, self.text_head, mel_emb, self.mel_head, get_attns=return_attentions, return_latent=return_latent)
             #print(f'get_logits(\n\t{conds.shape},\n\t{text_emb.shape},\n\t{self.text_head},\n\t{mel_emb.shape},\n\t{self.mel_head},\n\tget_attns={return_attentions},\n\treturn_latent={return_latent}\n) = {text_logits.shape}, {mel_logits.shape}')
 
@@ -433,9 +551,20 @@ class UnifiedVoice(nn.Module):
 
         if return_attentions:
             return mel_logits
-        loss_text = F.cross_entropy(text_logits, text_targets.long())
+        
         loss_mel = F.cross_entropy(mel_logits, mel_targets.long())
-        return loss_text.mean(), loss_mel.mean(), mel_logits
+
+        if not self.use_cross_attention:
+            loss_text = F.cross_entropy(text_logits, text_targets.long()) if not self.use_cross_attention else torch.tensor([0.]).to(text_inputs.device)
+            return loss_text.mean(), loss_mel.mean(), mel_logits
+        else:
+            # if True: # debug unused parameters
+            #     contributing_paras = set(get_contributing_params(loss_mel))
+            #     all_paras = set(self.parameters())
+            #     non_contributing_paras = all_paras - contributing_paras
+            #     print(non_contributing_paras)
+
+            return loss_mel.mean(), mel_logits
 
     def text_forward(self, speech_conditioning_input, text_inputs, text_lengths):
         """

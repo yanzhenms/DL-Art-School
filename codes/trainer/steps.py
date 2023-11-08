@@ -238,6 +238,9 @@ class ConfigurableStep(Module):
         self.env['amp_loss_id'] = amp_loss_id
         self.env['current_step_optimizers'] = self.optimizers
         self.env['training'] = train
+        # print('local_state before injection')
+        # for k,v in local_state.items():
+        #     print(k, v.shape if torch.is_tensor(v) else v)
 
         # Inject in any extra dependencies.
         for inj in self.injectors:

@@ -2,7 +2,7 @@ import json
 import numpy as np
 import logging
 from pathlib import Path
-
+from transformers import AutoTokenizer
 from torchtts.data.core import features
 from torchtts.data.core.dataset_builder import GeneratorBasedBuilder
 from torchtts.data.core.dataset_info import DatasetInfo
@@ -67,12 +67,16 @@ class TortoiseDataset(GeneratorBasedBuilder):
         self.conditioning_length = self._config.get("conditioning_length", 44100)
         self.load_aligned_codes = self._config.get("load_aligned_codes", False)
         self.aligned_codes_to_audio_ratio = self._config.get("aligned_codes_ratio", 443)
-
-        self.tokenizer = VoiceBpeTokenizer(self._config["vocab_path"])
-
         datapipe = datapipe.map(self._process_wav)
-        datapipe = datapipe.map(self._tokenize, fn_kwargs={"tokenizer": self.tokenizer})
-        datapipe = datapipe.filter(self._filter_unk_text)
+        
+        if self._config.get("use_t5_tokenizer", False):
+            self.tokenizer = AutoTokenizer.from_pretrained(self._config.get("t5_model", "google/flan-t5-base"))
+            datapipe = datapipe.map(self._tokenize_t5, fn_kwargs={"t5_tokenizer": self.tokenizer})
+        else:
+            self.tokenizer = VoiceBpeTokenizer(self._config["vocab_path"])
+            datapipe = datapipe.map(self._tokenize, fn_kwargs={"tokenizer": self.tokenizer})
+            datapipe = datapipe.filter(self._filter_unk_text)
+
         datapipe = datapipe.filter(self._filter_long_sentence, fn_kwargs={"max_text_tokens": self._config.get("max_text_tokens", 400),
                                                                           "max_audio_length": self._config.get("max_audio_length", 600 / 22 * 22050)})
         datapipe = datapipe.map(self._release_unnecessary_data)
@@ -131,6 +135,15 @@ class TortoiseDataset(GeneratorBasedBuilder):
         data["wav_lengths"] = torch.LongTensor([len(audio)])
         data["conditioning"] = data["wav"].unsqueeze(0)
         return data
+    
+    @staticmethod
+    def _tokenize_t5(data, t5_tokenizer):
+        text = data["text"]
+        returns = t5_tokenizer(text, return_tensors="pt")
+        data['original_text'] = text
+        data['text'] = returns['input_ids'].squeeze(0)
+        data['text_lengths'] = torch.LongTensor([len(returns['input_ids'])])
+        return data
 
     @staticmethod
     def _tokenize(data, tokenizer):
@@ -158,10 +171,28 @@ class TortoiseDataset(GeneratorBasedBuilder):
         if text.shape[0] > max_text_tokens or wav.shape[0] > max_audio_length:
             return False
         return True
+    
+    @staticmethod
+    def _filter_long_sentence(data, max_text_tokens, max_audio_length):
+        text = data["text"]
+        wav = data["wav"]
+        if text.shape[-1] > max_text_tokens or wav.shape[-1] > max_audio_length:
+            return False
+        return True
+    
+    @staticmethod
+    def _rename_and_resize(data):
+        data["text"] = np.squeeze(data["text"])
+        data["wav_lengths"] = np.squeeze(data["wav_lengths"])
+        data["text_lengths"] = np.squeeze(data["text_lengths"])
+        data["skipped_items"] = 0
+        data["conditioning_contains_self"]= 1
+
+        return data
 
     @staticmethod
     def _release_unnecessary_data(data):
-        necessary_keys = ["wav", "wav_lengths", "text", "text_lengths", "conditioning"]
+        necessary_keys = ["wav", "wav_lengths", "text", "text_lengths", "conditioning","skipped_items", "conditioning_contains_self"]
         for key in list(data.keys()):
             if key not in necessary_keys:
                 del data[key]
