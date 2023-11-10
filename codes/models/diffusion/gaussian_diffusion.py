@@ -647,7 +647,65 @@ class GaussianDiffusion:
                 if torch.any(mask):
                     img[mask] = orig_img[mask]  # For causal diffusion, keep resetting these predictions until they are unmasked.
                 orig_img = img
+    
+    def p_sample_flow(
+        self,
+        model,
+        shape,
+        noise=None,
+        model_kwargs=None,
+        num_steps = 10,
+        cond_free = True,
+        cfk = 0.5,
+        device=None,
+        progress=False,
+    ):
+        """
+        Generate samples from the model.
 
+        :param model: the model module.
+        :param shape: the shape of the samples, (N, C, H, W).
+        :param noise: if specified, the noise from the encoder to sample.
+                      Should be of the same shape as `shape`.
+        :param clip_denoised: if True, clip x_start predictions to [-1, 1].
+        :param denoised_fn: if not None, a function which applies to the
+            x_start prediction before it is used to sample.
+        :param cond_fn: if not None, this is a gradient function that acts
+                        similarly to the model.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :param device: if specified, the device to create the samples on.
+                       If not specified, use a model parameter's device.
+        :param progress: if True, show a tqdm progress bar.
+        :return: a non-differentiable batch of samples.
+        """
+        if device is None:
+            device = next(model.parameters()).device
+        assert isinstance(shape, (tuple, list))
+        if noise is not None:
+            x_t = noise
+        else:
+            x_t = th.randn(*shape, device=device)
+        
+
+        t_span = th.linspace(0, 1, num_steps + 1, device=device)
+        t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
+        for t in tqdm(t_span[:-1], disable=not progress):
+            t_batch = th.tensor([t] * shape[0], device=device) 
+            model_output = model(x_t, t_batch, **model_kwargs)
+            if cond_free:
+                model_output_no_conditioning = model(x_t, t_batch, conditioning_free=True, **model_kwargs)
+            B, C = x_t.shape[:2]
+            assert model_output.shape == (B, C * 2, *x_t.shape[2:])
+            model_output, _ = th.split(model_output, C, dim=1)
+            if cond_free:
+                model_output_no_conditioning, _ = th.split(model_output_no_conditioning, C, dim=1)
+            if cond_free:
+                model_output = (1 + cfk) * model_output - cfk * model_output_no_conditioning
+
+            x_t = x_t + dt * model_output
+        
+        return x_t
     def p_sample_loop_with_guidance(
         self,
         model,
@@ -1121,6 +1179,77 @@ class GaussianDiffusion:
                 terms["loss"] = terms["mse"] + mean_flat(terms["vb"])
             else:
                 terms["loss"] = terms["mse"]
+        else:
+            raise NotImplementedError(self.loss_type)
+
+        return terms
+    def reflow_losses(self, model, model_teacher, x_start, t, model_kwargs=None, noise=None):
+        """
+        Compute training losses for a single timestep.
+
+        :param model: the model to evaluate loss on.
+        :param x_start: the [N x C x ...] tensor of inputs.
+        :param t: a batch of timestep indices.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :param noise: if specified, the specific Gaussian noise to try to remove.
+        :return: a dict with the key "loss" containing a tensor of shape [N].
+                 Some mean or variance settings may also have other keys.
+        """
+        if model_kwargs is None:
+            model_kwargs = {}
+        if noise is None:
+            noise = th.randn_like(x_start)
+
+        if len(t.shape) == 3:
+            t, t_mask = causal_mask_and_fix(t, self.num_timesteps)
+            t_mask = t_mask.logical_not()  # This is used to mask out losses for timesteps that are out of bounds.
+        else:
+            t_mask = torch.ones_like(x_start)
+
+        # regenerate x_start with teacher model and noise
+        with th.no_grad():
+            x_start_new = self.p_sample_flow(model_teacher,shape=x_start.shape,noise=noise,model_kwargs = model_kwargs,
+                                             num_steps=40,cond_free=True,cfk=0.5,progress=False)
+
+        sigma_min = 1e-4
+        x_t = self.q_sample_flow(x_start_new, t, noise = noise, sigma_min = sigma_min)
+        u_target = x_start_new - (1 - sigma_min) * noise
+
+        terms = {}
+
+        if self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
+            # model_outputs = model(x_t, self._scale_timesteps(t), **model_kwargs)
+            model_outputs = model(x_t, t, **model_kwargs)
+            if isinstance(model_outputs, tuple):
+                model_output = model_outputs[0]
+                terms['extra_outputs'] = model_outputs[1:]
+            else:
+                model_output = model_outputs
+
+            if self.model_var_type in [
+                ModelVarType.LEARNED,
+                ModelVarType.LEARNED_RANGE,
+            ]:
+                B, C = x_t.shape[:2]
+                assert model_output.shape == (B, C * 2, *x_t.shape[2:])
+                model_output, _ = th.split(model_output, C, dim=1)
+                terms["vb"]=0
+
+            if self.model_mean_type == ModelMeanType.EPSILON:
+                # target = noise
+                target = u_target
+                # x_start_pred = self._predict_xstart_from_eps(x_t, t, model_output)
+                x_start_pred = self._predict_xstart_from_vector_field(x_t,t,model_output)
+            else:
+                raise NotImplementedError(self.model_mean_type)
+            assert model_output.shape == target.shape == x_start_new.shape
+            s_err = t_mask * (target - model_output) ** 2
+
+            terms["mse_by_batch"] = s_err.reshape(s_err.shape[0], -1).mean(dim=1)
+            terms["mse"] = mean_flat(s_err)
+            terms["x_start_predicted"] =  x_start_pred
+            terms["loss"] = terms["mse"]
         else:
             raise NotImplementedError(self.loss_type)
 

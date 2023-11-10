@@ -78,7 +78,8 @@ class GaussianDiffusionInjector(Injector):
         return d
 
     def forward(self, state):
-        gen = self.env['generators'][self.opt['generator']]
+        gen = self.env['generators'][self.opt['generator']] # model to be trained
+        model_teacher = self.env['generators']['ddpm_teacher'] # teacher models
         hq = state[self.input]
         assert hq.max() < 1.000001 or hq.min() > -1.00001, f"Attempting to train gaussian diffusion on un-normalized inputs. This won't work, silly! {hq.min()} {hq.max()}"
 
@@ -100,8 +101,9 @@ class GaussianDiffusionInjector(Injector):
                                                                    channel_balancing_fn=self.channel_balancing_fn,
                                                                           causal_slope=slope)
             else:
-                diffusion_outputs = self.diffusion.training_losses(gen, hq, t, model_kwargs=model_inputs,
-                                                                   channel_balancing_fn=self.channel_balancing_fn)
+                # diffusion_outputs = self.diffusion.training_losses(gen, hq, t, model_kwargs=model_inputs,
+                #                                                    channel_balancing_fn=self.channel_balancing_fn)
+                diffusion_outputs = self.diffusion.reflow_losses(gen, model_teacher,  hq, t, model_kwargs=model_inputs)
 
             if isinstance(sampler, LossAwareSampler):
                 sampler.update_with_local_losses(t, diffusion_outputs['loss'])
