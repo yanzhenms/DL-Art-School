@@ -8,6 +8,7 @@ Docstrings have been added, as well as DDIM sampling and a new collection of bet
 import enum
 import math
 import random
+import copy
 
 import numpy as np
 import torch
@@ -679,6 +680,8 @@ class GaussianDiffusion:
         :param progress: if True, show a tqdm progress bar.
         :return: a non-differentiable batch of samples.
         """
+        model_kwargs_infer = copy.deepcopy(model_kwargs)
+        model_kwargs_infer['return_code_pred']=False
         if device is None:
             device = next(model.parameters()).device
         assert isinstance(shape, (tuple, list))
@@ -692,9 +695,9 @@ class GaussianDiffusion:
         t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
         for t in tqdm(t_span[:-1], disable=not progress):
             t_batch = th.tensor([t] * shape[0], device=device) 
-            model_output = model(x_t, t_batch, **model_kwargs)
+            model_output = model(x_t, t_batch, **model_kwargs_infer)
             if cond_free:
-                model_output_no_conditioning = model(x_t, t_batch, conditioning_free=True, **model_kwargs)
+                model_output_no_conditioning = model(x_t, t_batch, conditioning_free=True, **model_kwargs_infer)
             B, C = x_t.shape[:2]
             assert model_output.shape == (B, C * 2, *x_t.shape[2:])
             model_output, _ = th.split(model_output, C, dim=1)
@@ -1234,7 +1237,7 @@ class GaussianDiffusion:
                 B, C = x_t.shape[:2]
                 assert model_output.shape == (B, C * 2, *x_t.shape[2:])
                 model_output, _ = th.split(model_output, C, dim=1)
-                terms["vb"]=0
+                terms["vb"]=th.tensor(0.0)
 
             if self.model_mean_type == ModelMeanType.EPSILON:
                 # target = noise
