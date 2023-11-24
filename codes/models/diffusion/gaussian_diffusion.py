@@ -680,8 +680,7 @@ class GaussianDiffusion:
         :param progress: if True, show a tqdm progress bar.
         :return: a non-differentiable batch of samples.
         """
-        model_kwargs_infer = copy.deepcopy(model_kwargs)
-        model_kwargs_infer['return_code_pred']=False
+        model_kwargs['return_code_pred']=False
         if device is None:
             device = next(model.parameters()).device
         assert isinstance(shape, (tuple, list))
@@ -692,22 +691,28 @@ class GaussianDiffusion:
         
 
         t_span = th.linspace(0, 1, num_steps + 1, device=device)
+        print(f't_span:{t_span.device}')
         t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
-        for t in tqdm(t_span[:-1], disable=not progress):
+        for t in t_span[:-1]:
             t_batch = th.tensor([t] * shape[0], device=device) 
-            model_output = model(x_t, t_batch, **model_kwargs_infer)
+            print(f't_batch:{t_batch.device}')
+            model_output = model(x_t, t_batch, **model_kwargs)
+            print(f'model_output:{model_output.device}')
             if cond_free:
-                model_output_no_conditioning = model(x_t, t_batch, conditioning_free=True, **model_kwargs_infer)
+                model_output_no_conditioning = model(x_t, t_batch, conditioning_free=True, **model_kwargs)
+                print(f'model_output_no:{model_output_no_conditioning.device}')
             B, C = x_t.shape[:2]
             assert model_output.shape == (B, C * 2, *x_t.shape[2:])
             model_output, _ = th.split(model_output, C, dim=1)
+            print(f'model_output:{model_output.device}')
             if cond_free:
                 model_output_no_conditioning, _ = th.split(model_output_no_conditioning, C, dim=1)
+                print(f'model_output_no:{model_output_no_conditioning.device}')
             if cond_free:
                 model_output = (1 + cfk) * model_output - cfk * model_output_no_conditioning
-
+                print(f'model_output:{model_output.device}')
             x_t = x_t + dt * model_output
-        
+            print(f'x_t:{x_t.device}')
         return x_t
     def p_sample_loop_with_guidance(
         self,
@@ -1210,15 +1215,16 @@ class GaussianDiffusion:
         else:
             t_mask = torch.ones_like(x_start)
 
-        # regenerate x_start with teacher model and noise
+        # regenerate x_start with teacher model and noise, the num_steps and cfk can be adjusted
         with th.no_grad():
             x_start_new = self.p_sample_flow(model_teacher,shape=x_start.shape,noise=noise,model_kwargs = model_kwargs,
                                              num_steps=40,cond_free=True,cfk=0.5,progress=False)
 
+        model_kwargs['return_code_pred']=True
         sigma_min = 1e-4
         x_t = self.q_sample_flow(x_start_new, t, noise = noise, sigma_min = sigma_min)
         u_target = x_start_new - (1 - sigma_min) * noise
-
+        
         terms = {}
 
         if self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
