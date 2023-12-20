@@ -17,6 +17,17 @@ class Injector(torch.nn.Module):
             self.input = opt['in']
         if 'out' in opt.keys():
             self.output = opt['out']
+        if 'micro_batch' in opt.keys():
+            '''
+            this label shows whether the injector the micro-batch state
+            - false: then the injector takes the whole-batch state as input
+                    this can only be used when the injector's input are also not micro-batch
+            - true: then the injector takes the micro-batch state as input
+                    nothing else is required.
+            '''
+            self.micro_batch = opt['micro_batch']
+        else:
+            self.micro_batch = True
 
     # This should return a dict of new state variables.
     def forward(self, state):

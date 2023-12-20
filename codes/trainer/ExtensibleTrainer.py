@@ -299,6 +299,10 @@ class ExtensibleTrainer(BaseModel):
 
                 for o in step.get_optimizers():
                     o.zero_grad()
+            
+            # do a whole batch forward
+            chunk_state = step.do_whole_batch_forward(state)
+            state.update(chunk_state)
 
             # Now do a forward and backward pass for each gradient accumulation step.
             new_states = {}

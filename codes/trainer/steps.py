@@ -4,6 +4,7 @@ from lion_pytorch import Lion
 
 from utils.loss_accumulator import LossAccumulator
 from torch.nn import Module
+import torch.nn.functional as F
 import logging
 from trainer.losses import create_loss
 import torch
@@ -14,6 +15,15 @@ from utils.util import recursively_detach, opt_get, clip_grad_norm
 logger = logging.getLogger('base')
 
 import maybe_bnb as mbnb
+def check_shapes_equal(tensor_list):
+    first_shape = tensor_list[0].size()[1:]
+    # 检查列表中的每个tensor的shape是否与第一个tensor的shape相同
+    for tensor in tensor_list[1:]:
+        if tensor.size()[1:] != first_shape:
+            return False
+
+    # 所有tensor的shape都相同
+    return True
 
 # Defines the expected API for a single training step
 class ConfigurableStep(Module):
@@ -226,6 +236,57 @@ class ConfigurableStep(Module):
     # Performs all forward and backward passes for this step given an input state. All input states are lists of
     # chunked tensors. Use grad_accum_step to dereference these steps. Should return a dict of tensors that later
     # steps might use. These tensors are automatically detached and accumulated into chunks.
+    
+    def do_whole_batch_forward(self, state):
+        '''
+        each value in state is a list of tensors
+        we will first concate them
+        after injections we will chunk them
+        '''
+        
+        for k, v in state.items():
+            mega_batch_factor = len(v)
+            device = v[0].device
+            break
+
+        new_state = {}  # <-- Will store state values created by this step for returning to ExtensibleTrainer.
+        for k, v in state.items():
+            if check_shapes_equal(v):
+                new_state[k] = torch.cat(v,dim=0)
+            else:
+                # calculate max length
+                max_len = 0
+                for c in range(len(v)):
+                    max_len = max(max_len,v[c].shape[-1])
+                # padding
+                new_state[k] = []
+                for c in range(len(v)):
+                    new_state[k].append(F.pad(v[c],(0,max_len-v[c].shape[-1])))
+                # concat
+                new_state[k] = torch.cat(new_state[k],dim=0)
+            
+                
+
+        # Inject
+        for inj in self.injectors:
+            if not inj.micro_batch:
+                injected = inj(new_state)
+                new_state.update(injected)
+
+        # Chunk
+        chunk_state = {}
+        for k, v in new_state.items():
+            if isinstance(v, torch.Tensor):
+                chunk_state[k] = [t.to(device) for t in torch.chunk(v, chunks=mega_batch_factor, dim=0)]
+
+
+        # Detach all state variables. Within the step, gradients can flow. Once these variables leave the step
+        # we must release the gradients.
+        chunk_state = recursively_detach(chunk_state)
+
+        return chunk_state
+    
+    
     def do_forward_backward(self, state, grad_accum_step, amp_loss_id, train=True, no_ddp_sync=False, loss_accumulator=None):
         local_state = {}  # <-- Will store the entire local state to be passed to injectors & losses.
         new_state = {}  # <-- Will store state values created by this step for returning to ExtensibleTrainer.
@@ -264,7 +325,7 @@ class ConfigurableStep(Module):
             elif opt_get(inj.opt, ['no_grad'], False):
                 with torch.no_grad():
                     injected = inj(local_state)
-            else:
+            elif inj.micro_batch:
                 injected = inj(local_state)
             local_state.update(injected)
             new_state.update(injected)

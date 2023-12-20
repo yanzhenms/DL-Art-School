@@ -1098,8 +1098,8 @@ class GaussianDiffusion:
         """
         if model_kwargs is None:
             model_kwargs = {}
-        if noise is None:
-            noise = th.randn_like(x_start)
+        # if noise is None:
+            # noise = th.randn_like(x_start)
 
         if len(t.shape) == 3:
             t, t_mask = causal_mask_and_fix(t, self.num_timesteps)
@@ -1152,7 +1152,7 @@ class GaussianDiffusion:
                 #     t=t,
                 #     clip_denoised=False,
                 # )["output"]
-                terms["vb"]=0
+                terms["vb"]=torch.tensor(0.0)
                 if self.loss_type == LossType.RESCALED_MSE:
                     # Divide by 1000 for equivalence with initial implementation.
                     # Without a factor of 1/1000, the VB term hurts the MSE term.
