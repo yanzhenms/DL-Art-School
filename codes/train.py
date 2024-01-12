@@ -68,7 +68,8 @@ class Trainer:
             self.logger.info(option.dict2str(opt))
             # tensorboard logger
             if opt['use_tb_logger'] and 'debug' not in opt['name']:
-                self.tb_logger_path = os.path.join(opt['path']['experiments_root'], 'tb_logger')
+                # self.tb_logger_path = os.path.join(opt['path']['experiments_root'], 'tb_logger')
+                self.tb_logger_path = opt['path']['tb_logger']
                 from torch.utils.tensorboard import SummaryWriter
                 self.tb_logger = SummaryWriter(log_dir=self.tb_logger_path)
         else:
@@ -391,11 +392,31 @@ class Trainer:
 
 
 if __name__ == '__main__':
+    os.chdir('codes')
     parser = argparse.ArgumentParser()
     parser.add_argument('-opt', type=str, help='Path to option YAML file.', default='../options/train_vit_latent.yml')
     parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none', help='job launcher')
+
+    parser.add_argument('--model-dir', type=str, required=True, help='model directory')
+    parser.add_argument('--log-dir', type=str, default=None, help='log directory')
     args = parser.parse_args()
+    os.makedirs(args.model_dir,exist_ok=True)
+    os.makedirs(args.log_dir,exist_ok=True)
+
+    
+
+    model_path = os.path.join(args.model_dir,'models')
+    os.makedirs(model_path,exist_ok=True)
+    state_path = os.path.join(args.model_dir,'training_state')
+    os.makedirs(state_path,exist_ok=True)
+    log_path = os.path.join(args.model_dir,'tb_logger')
+    os.makedirs(log_path,exist_ok=True)
+
     opt = option.parse(args.opt, is_train=True)
+    opt['path']['model_save_path'] = model_path
+    opt['path']['training_state_save_path'] = state_path
+    opt['path']['tb_logger'] = log_path
+
     if args.launcher != 'none':
         # export CUDA_VISIBLE_DEVICES for running in distributed mode.
         if 'gpu_ids' in opt.keys():

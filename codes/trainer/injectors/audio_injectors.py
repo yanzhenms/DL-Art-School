@@ -3,6 +3,8 @@ import random
 import torch
 import torch.nn.functional as F
 import torchaudio
+import numpy as np
+import ot
 
 from models.audio.music.cheater_gen_ar import ConditioningAR
 from trainer.inject import Injector
@@ -183,7 +185,39 @@ class DiscreteTokenInjector(Injector):
             self.dvae = self.dvae.to(inp.device)
             codes = self.dvae.get_codebook_indices(inp)
             return {self.output: codes}
-        
+
+class OptimTransPairInjector(Injector):
+    '''
+    This injector finds the best coupling relationship between a batch of random sampled noises and a batch of data
+    '''
+    def __init__(self,opt,env):
+        super().__init__(opt, env)
+        return
+    def forward(self,state):
+        with torch.no_grad():
+            data = state[self.input] # target mel
+            data_np = data.to('cpu').numpy()
+            batch_sz = data_np.shape[0]
+            noise_np = np.random.randn(*data_np.shape)
+
+            # calculate distance between noise and target
+            M = ot.dist(noise_np.reshape(batch_sz,-1),data_np.reshape(batch_sz,-1),metric='euclidean')
+            M = pow(M,2)
+            # normalize M to increase stablity
+            M = M/M.max()
+            # suppose the noise and target are both sampled from a uniform distribution
+            alpha = ot.unif(batch_sz)
+            beta = ot.unif(batch_sz)
+
+            # calculate the optimal transport permutation
+            # Perm = batch_sz*ot.emd(alpha,beta,M,numItermax=100000)
+            # noise_perm = (np.arange(batch_sz)@Perm).astype(np.int32)
+            Perm = ot.sinkhorn(alpha,beta,M,1,numItermax=100000)
+            noise_perm = np.argmax(Perm,axis=0)
+            noise_val_perm = noise_np[noise_perm,:,:]
+            
+        return {self.output: torch.tensor(noise_val_perm,dtype=torch.float32).to(data.device)}
+
 class GptVoiceLatentInjector(Injector):
     """
     This injector does all the legwork to generate latents out of a UnifiedVoice model, including encoding all audio

@@ -86,7 +86,7 @@ class BaseModel():
 
     def save_network(self, network, network_label, iter_label):
         save_filename = '{}_{}.pth'.format(iter_label, network_label)
-        save_path = os.path.join(self.opt['path']['models'], save_filename)
+        save_path = os.path.join(self.opt['path']['model_save_path'], save_filename)
         if isinstance(network, nn.DataParallel) or isinstance(network, DistributedDataParallel):
             network = network.module
         state_dict = network.state_dict()
@@ -147,7 +147,7 @@ class BaseModel():
         if 'amp_opt_level' in self.opt.keys():
             state['amp'] = amp.state_dict()
         save_filename = '{}.state'.format(utils.util.opt_get(state, ['iter'], 'no_step_provided'))
-        save_path = os.path.join(self.opt['path']['training_state'], save_filename)
+        save_path = os.path.join(self.opt['path']['training_state_save_path'], save_filename)
         torch.save(map_to_device(state, 'cpu'), save_path)
         if '__state__' not in self.save_history.keys():
             self.save_history['__state__'] = []

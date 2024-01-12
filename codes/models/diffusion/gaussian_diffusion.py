@@ -680,8 +680,7 @@ class GaussianDiffusion:
         :param progress: if True, show a tqdm progress bar.
         :return: a non-differentiable batch of samples.
         """
-        model_kwargs_infer = copy.deepcopy(model_kwargs)
-        model_kwargs_infer['return_code_pred']=False
+        model_kwargs['return_code_pred']=False
         if device is None:
             device = next(model.parameters()).device
         assert isinstance(shape, (tuple, list))
@@ -695,9 +694,9 @@ class GaussianDiffusion:
         t, _, dt = t_span[0], t_span[-1], t_span[1] - t_span[0]
         for t in tqdm(t_span[:-1], disable=not progress):
             t_batch = th.tensor([t] * shape[0], device=device) 
-            model_output = model(x_t, t_batch, **model_kwargs_infer)
+            model_output = model(x_t, t_batch, **model_kwargs)
             if cond_free:
-                model_output_no_conditioning = model(x_t, t_batch, conditioning_free=True, **model_kwargs_infer)
+                model_output_no_conditioning = model(x_t, t_batch, conditioning_free=True, **model_kwargs)
             B, C = x_t.shape[:2]
             assert model_output.shape == (B, C * 2, *x_t.shape[2:])
             model_output, _ = th.split(model_output, C, dim=1)
@@ -1093,8 +1092,8 @@ class GaussianDiffusion:
         """
         if model_kwargs is None:
             model_kwargs = {}
-        if noise is None:
-            noise = th.randn_like(x_start)
+        # if noise is None:
+        #     noise = th.randn_like(x_start)
 
         if len(t.shape) == 3:
             t, t_mask = causal_mask_and_fix(t, self.num_timesteps)
@@ -1147,7 +1146,7 @@ class GaussianDiffusion:
                 #     t=t,
                 #     clip_denoised=False,
                 # )["output"]
-                terms["vb"]=0
+                terms["vb"]=torch.tensor(0.0)
                 if self.loss_type == LossType.RESCALED_MSE:
                     # Divide by 1000 for equivalence with initial implementation.
                     # Without a factor of 1/1000, the VB term hurts the MSE term.
@@ -1213,8 +1212,9 @@ class GaussianDiffusion:
         # regenerate x_start with teacher model and noise
         with th.no_grad():
             x_start_new = self.p_sample_flow(model_teacher,shape=x_start.shape,noise=noise,model_kwargs = model_kwargs,
-                                             num_steps=40,cond_free=True,cfk=0.5,progress=False)
+                                             num_steps=20,cond_free=True,cfk=0.5,progress=False)
 
+        model_kwargs['return_code_pred']=True
         sigma_min = 1e-4
         x_t = self.q_sample_flow(x_start_new, t, noise = noise, sigma_min = sigma_min)
         u_target = x_start_new - (1 - sigma_min) * noise
