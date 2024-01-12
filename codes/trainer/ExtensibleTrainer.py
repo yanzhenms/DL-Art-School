@@ -299,10 +299,6 @@ class ExtensibleTrainer(BaseModel):
 
                 for o in step.get_optimizers():
                     o.zero_grad()
-            
-            # do a whole batch forward
-            chunk_state = step.do_whole_batch_forward(state)
-            state.update(chunk_state)
 
             # Now do a forward and backward pass for each gradient accumulation step.
             new_states = {}
@@ -538,7 +534,7 @@ class ExtensibleTrainer(BaseModel):
             for name, net in netdict.items():
                 load_path = self.opt['path']['pretrain_model_%s' % (name,)]
                 if load_path is None:
-                    return
+                    continue
                 if self.rank <= 0:
                     logger.info('Loading model for [%s]' % (load_path,))
                 self.load_network(load_path, net, self.opt['path']['strict_load'], opt_get(self.opt, ['path', f'pretrain_base_path_{name}']))

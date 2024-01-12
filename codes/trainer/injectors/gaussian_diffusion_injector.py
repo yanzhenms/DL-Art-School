@@ -78,10 +78,11 @@ class GaussianDiffusionInjector(Injector):
         return d
 
     def forward(self, state):
-        gen = self.env['generators'][self.opt['generator']] # model to be trained
-        # model_teacher = self.env['generators']['ddpm_teacher'] # teacher models
+        # gen = self.env['generators'][self.opt['generator']] # model to be trained
+
+        gen = self.env['generators']['bespoke'] # bespoke sovler to be trained
+        model_teacher = self.env['generators']['ddpm_teacher'].module # teacher models
         hq = state[self.input]
-        noises = state['noises']
         assert hq.max() < 1.000001 or hq.min() > -1.00001, f"Attempting to train gaussian diffusion on un-normalized inputs. This won't work, silly! {hq.min()} {hq.max()}"
 
         with autocast(enabled=self.env['opt']['fp16']):
@@ -93,6 +94,8 @@ class GaussianDiffusionInjector(Injector):
             model_inputs = {k: state[v] if isinstance(v, str) else v for k, v in self.model_input_keys.items()}
             # t, weights = sampler.sample(hq.shape[0], hq.device)
             t = torch.rand((hq.shape[0],),device = hq.device) # random timestep
+            noise = torch.randn_like(hq, device = hq.device)
+
             if self.preprocess_fn is not None:
                 hq = getattr(gen.module, self.preprocess_fn)(hq, t, self.diffusion)
             if self.causal_mode:
@@ -102,9 +105,12 @@ class GaussianDiffusionInjector(Injector):
                                                                    channel_balancing_fn=self.channel_balancing_fn,
                                                                           causal_slope=slope)
             else:
-                diffusion_outputs = self.diffusion.training_losses(gen, hq, t, model_kwargs=model_inputs, noise=noises,
-                                                                   channel_balancing_fn=self.channel_balancing_fn)
+                # diffusion_outputs = self.diffusion.training_losses(gen, hq, t, model_kwargs=model_inputs,
+                #                                                    channel_balancing_fn=self.channel_balancing_fn)
                 # diffusion_outputs = self.diffusion.reflow_losses(gen, model_teacher,  hq, t, model_kwargs=model_inputs)
+                # diffusion_outputs = self.diffusion.bespoke_losses(gen, model_teacher, noise, model_inputs)
+                diffusion_outputs = gen(model_teacher,noise,model_inputs)
+
 
             if isinstance(sampler, LossAwareSampler):
                 sampler.update_with_local_losses(t, diffusion_outputs['loss'])
