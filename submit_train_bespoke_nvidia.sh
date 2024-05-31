@@ -15,7 +15,7 @@ sla_tier="Premium"             # Basic, Standard or Premium
 distributed="false"            # enable distributed training or not
 
 project_name="bespoke"    # project name (e.g., tacotron/fastspeech)
-exp_name="bespoke-1"  # experimental name (e.g., Evan/Guy/Aria)
+exp_name="bespoke-5-euler-4"  # experimental name (e.g., Evan/Guy/Aria)
 
 # if the packages not installed in the docker, you can install them here
 extra_env_setup_cmd="pip install torchvision==0.15.2 torchaudio==2.0.2; pip install --user -r codes/requirements.laxed.txt; python codes/setup.py install" # or extra_env_setup_cmd=""
@@ -46,3 +46,4 @@ python -u third_party/Submitter/utils/amlt_submit.py \
   --run-cmd "python codes/train.py -opt ../experiments/sydney_bespoke.yml" \
   --enable-cyber-eo "false"
 #  --extra-params "${extra_params}" 
+  # --run-cmd "torchrun --nproc_per_node=2 --master_port=1234 codes/train.py -opt ../experiments/sydney_bespoke.yml --launcher=pytorch"\

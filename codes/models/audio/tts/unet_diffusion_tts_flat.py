@@ -260,9 +260,9 @@ class DiffusionTtsFlat(nn.Module):
 
         # Note: this block does not need to repeated on inference, since it is not timestep-dependent or x-dependent.
         speech_conditioning_input = conditioning_input.unsqueeze(1) if len(
-            conditioning_input.shape) == 3 else conditioning_input
+            conditioning_input.shape) == 3 else conditioning_input # if conditioning_input is not multi-sampled, then unsqueeze it.
         conds = []
-        for j in range(speech_conditioning_input.shape[1]):
+        for j in range(speech_conditioning_input.shape[1]): # iterate in multi-sample dimension
             conds.append(self.contextual_embedder(speech_conditioning_input[:, j]))
         conds = torch.cat(conds, dim=-1)
         cond_emb = conds.mean(dim=-1)
@@ -306,6 +306,10 @@ class DiffusionTtsFlat(nn.Module):
         """
         assert precomputed_aligned_embeddings is not None or (aligned_conditioning is not None and conditioning_input is not None)
         assert not (return_code_pred and precomputed_aligned_embeddings is not None)  # These two are mutually exclusive.
+        if len(timesteps.shape) ==0:
+            timesteps = timesteps.unsqueeze(0)
+        batch, input_channels = x.shape[0:2]
+        # print('evaluated')
 
         unused_params = list(self.mel_head.parameters())
         if conditioning_free:
@@ -349,7 +353,9 @@ class DiffusionTtsFlat(nn.Module):
 
         if return_code_pred:
             return out, mel_pred
-        return out
+        mean,_ = torch.split(out,input_channels , dim=1)
+        # print(f'mean = {mean.shape}')
+        return mean
 
     def get_conditioning_latent(self, conditioning_input):
         speech_conditioning_input = conditioning_input.unsqueeze(1) if len(
